@@ -1,0 +1,66 @@
+#env
+.env
+.env.*
+*.pem
+*.key
+secrets.json
+
+#backend
+backend/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+
+# Virtual environments 
+backend/venv/
+backend/env/
+backend/.venv/
+.venv/
+
+# Testing & Caching 
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+.coverage
+
+# File Database Local 
+*.db
+*.sqlite3
+
+# Build files
+backend/dist/
+backend/build/
+backend/*.egg-info/
+
+
+# 3. Frontend (React / Vite)
+
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/              
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+
+# 4. Docker & Local Data 
+
+
+data/
+volumes/
+postgres_data/
+qdrant_data/
+redis_data/
+
+
+# 5. OS & IDE
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.log
+*.pid

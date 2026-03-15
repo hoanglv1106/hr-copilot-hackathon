@@ -1,0 +1,39 @@
+# File: requirements.txt
+# Công dụng: Khai báo tất cả thư viện Python cần thiết
+
+# FastAPI & API Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.4.2
+pydantic-settings==2.0.3
+
+# Database
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+
+# Caching
+redis==5.0.1
+
+# Vector Database
+qdrant-client==2.7.0
+
+# LLM & Embeddings
+google-generativeai==0.3.0
+cohere==4.37
+
+# Text Processing
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+langchain==0.0.352
+tiktoken==0.5.1
+
+# Utilities
+python-dateutil==2.8.2
+requests==2.31.0
+httpx==0.25.1
+
+# Development & Testing
+pytest==7.4.3
+black==23.11.0
+flake8==6.1.0
