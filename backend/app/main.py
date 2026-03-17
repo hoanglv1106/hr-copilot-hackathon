@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 import logging
 
 from app.api.v1 import chat as chat_router
+from app.api.v1 import documents as documents_router
 from app.core.database import init_db, close_db
 
 # Setup logging
@@ -32,6 +33,7 @@ app.add_middleware(
 
 # Gắn các routers
 app.include_router(chat_router.router, prefix="/api/v1")
+app.include_router(documents_router.router, prefix="/api/v1")
 
 
 # ============================================================================

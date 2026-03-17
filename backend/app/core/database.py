@@ -94,27 +94,22 @@ def get_db() -> Generator[Session, None, None]:
 def init_db():
     """
     Initialize database - create all tables.
-    
+
     Should be called on application startup.
-    
+
     Usage:
         from app.core.database import init_db
-        from app.models.history import Base
-        
-        # Import all models to register them with Base
-        from app.models import history
-        
         init_db()
     """
     try:
-        logger.info("🔧 Initializing database...")
-        # Import models here to ensure they're registered
-        from app.models.history import Base
-        
+        logger.info("Initializing database...")
+        from app.models.base import Base
+        from app.models import history, document
+
         Base.metadata.create_all(bind=engine)
-        logger.info("✅ Database initialized successfully")
+        logger.info("Database initialized successfully")
     except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
+        logger.error(f"Database initialization failed: {e}", exc_info=True)
         raise
 
 
@@ -127,7 +122,7 @@ def close_db():
     try:
         logger.info("🔌 Closing database engine...")
         engine.dispose()
-        logger.info("✅ Database engine closed")
+        logger.info(" Database engine closed")
     except Exception as e:
-        logger.error(f"❌ Error closing database: {e}", exc_info=True)
+        logger.error(f" Error closing database: {e}", exc_info=True)
         raise
