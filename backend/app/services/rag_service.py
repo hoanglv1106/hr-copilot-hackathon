@@ -1,295 +1,263 @@
-"""
-File: rag_service.py
-Công dụng: Service layer chứa business logic chính của hệ thống RAG
-- RAGService: Class chính orchestrate toàn bộ pipeline
-
-Pipeline: Retrieve (Qdrant) → Rerank (Cohere) → Format Context → Prompting → Generate (Gemini) → Parse JSON
-
-Là "Não bộ" của hệ thống
-"""
-
 import json
 import logging
 from typing import Optional
 
 from app.core.prompt_templates import HR_RAG_PROMPT
-from app.integrations.service.rerank_client_service import CohereRerankService
-from app.integrations.service.qdrant_client_service import QdrantService
-from app.integrations.service.gemini_llm_service import GeminiService
-
-# ============================================================================
-# SETUP
-# ============================================================================
+from app.integrations.rerank_client import CohereRerankService
+from app.integrations.qdrant_client import QdrantService
+from app.integrations.llm_client import GeminiService
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# RAG SERVICE CLASS
-# ============================================================================
-
-
 class RAGService:
     """
-    Service orchestrate toàn bộ RAG pipeline.
-    
-    Pipeline:
-    1. Retrieve: Search Qdrant để lấy top 10 documents
-    2. Rerank: Lọc với Cohere để lấy top 3 documents tốt nhất
-    3. Format Context: Gom 3 docs thành chuỗi string rõ ràng với metadata
-    4. Prompting: Đưa context + question vào HR_RAG_PROMPT
-    5. Generate: Gọi GeminiService để sinh câu trả lời
-    6. Parse JSON: Strip markdown, parse JSON response
+    Orchestrates the 6-step RAG pipeline: Retrieve → Rerank → Format → Prompt → Generate → Parse.
     """
 
     def __init__(self):
-        """
-        Khởi tạo RAG Service.
-        - Khởi tạo cả 3 integration services: Qdrant, Cohere, Gemini
-        - Set thông số mặc định cho pipeline
-        """
+        """Initialize RAG Service with integration services and pipeline parameters."""
         try:
-            logger.info("🔄 Khởi tạo RAGService...")
-
-            # Khởi tạo services
             self.qdrant_service = QdrantService()
-            logger.info("✅ QdrantService initialized")
-
             self.cohere_service = CohereRerankService()
-            logger.info("✅ CohereRerankService initialized")
-
             self.gemini_service = GeminiService(temperature=0.2)
-            logger.info("✅ GeminiService initialized")
 
-            # Thông số mặc định
             self.retrieve_top_k = 10
             self.rerank_top_n = 3
 
-            logger.info("✅ RAGService initialized successfully")
+            logger.info("RAGService initialized")
 
         except Exception as e:
-            logger.error(f"❌ Lỗi khởi tạo RAGService: {e}", exc_info=True)
+            logger.error(f"Failed to initialize RAGService: {e}", exc_info=True)
             raise
 
-    def answer_question(self, question: str) -> dict:
+    def answer_question(
+        self,
+        question: str,
+        conversation_history: list[dict] = None
+    ) -> dict:
         """
-        Trả lời câu hỏi sử dụng RAG pipeline.
+        Answer a question using RAG pipeline with multi-turn conversation support.
 
         Args:
-            question (str): Câu hỏi từ user
+            question: User's question
+            conversation_history: List of previous messages for context: [{"role": "user"|"assistant", "content": "..."}, ...]
 
         Returns:
-            dict: {
-                "answer": "Câu trả lời",
-                "sources": [{"doc_name": "...", "page": X, "article": "..."}, ...]
-            }
+            Dictionary with "answer" and "sources" keys
         """
         try:
-            logger.info(f"📝 Processing question: {question}")
+            logger.info(f"Processing: {question[:60]}...")
 
-            # ================================================================
-            # BƯỚC 1: RETRIEVE - Search Qdrant để lấy top 10 documents
-            # ================================================================
-            logger.info(f"[1/6] RETRIEVE: Searching Qdrant (top_k={self.retrieve_top_k})...")
-            retrieved_docs = self.qdrant_service.search(
-                query=question,
-                top_k=self.retrieve_top_k
-            )
-            logger.info(f"✅ Retrieved {len(retrieved_docs)} documents")
+            history_str = self._build_history_string(conversation_history)
 
-            # Xử lý nếu không tìm thấy document nào
+            try:
+                retrieved_docs = self.qdrant_service.search(
+                    query=question,
+                    top_k=self.retrieve_top_k
+                )
+                logger.info(f"Retrieved {len(retrieved_docs)} documents")
+            except Exception as e:
+                logger.error(f"Qdrant search failed: {e}", exc_info=True)
+                return self._no_result_response()
+
             if not retrieved_docs:
-                logger.warning("⚠️  Không tìm thấy document nào")
+                logger.warning("No documents found")
                 return self._no_result_response()
 
-            # ================================================================
-            # BƯỚC 2: RERANK - Lọc lại với Cohere để lấy top 3 documents
-            # ================================================================
-            logger.info(f"[2/6] RERANK: Reranking {len(retrieved_docs)} documents...")
+            try:
+                doc_strings = [doc["content"] for doc in retrieved_docs]
+                reranked_docs_strings = self.cohere_service.rerank(
+                    query=question,
+                    documents=doc_strings,
+                    top_n=self.rerank_top_n
+                )
+                logger.info(f"Reranked to {len(reranked_docs_strings)} documents")
+            except Exception as e:
+                logger.error(f"Cohere rerank failed: {e}", exc_info=True)
+                reranked_docs_strings = doc_strings[:self.rerank_top_n]
 
-            # Chuyển document objects thành list string để rerank
-            doc_strings = [doc["content"] for doc in retrieved_docs]
-            reranked_docs_strings = self.cohere_service.rerank(
-                query=question,
-                documents=doc_strings,
-                top_n=self.rerank_top_n
-            )
-            logger.info(f"✅ Reranked to {len(reranked_docs_strings)} documents")
+            try:
+                top_docs = []
+                for reranked_str in reranked_docs_strings:
+                    for original_doc in retrieved_docs:
+                        if original_doc["content"] == reranked_str:
+                            top_docs.append(original_doc)
+                            break
 
-            # Map reranked strings back to original doc objects
-            top_docs = []
-            for reranked_str in reranked_docs_strings:
-                # Tìm doc gốc từ content
-                for original_doc in retrieved_docs:
-                    if original_doc["content"] == reranked_str:
-                        top_docs.append(original_doc)
-                        break
-
-            if not top_docs:
-                logger.warning("⚠️  Sau rerank không còn document nào")
+                if not top_docs:
+                    logger.warning("No documents matched after reranking")
+                    return self._no_result_response()
+            except Exception as e:
+                logger.error(f"Document mapping failed: {e}", exc_info=True)
                 return self._no_result_response()
 
-            # ================================================================
-            # BƯỚC 3: FORMAT CONTEXT - Gom documents thành chuỗi string
-            # ================================================================
-            logger.info(f"[3/6] FORMAT CONTEXT: Formatting {len(top_docs)} documents...")
-            context_str = self._format_context(top_docs)
-            logger.debug(f"   Context length: {len(context_str)} chars")
+            try:
+                context_str = self._format_context(top_docs)
+                logger.info(f"Context formatted ({len(context_str)} chars)")
+            except Exception as e:
+                logger.error(f"Context formatting failed: {e}", exc_info=True)
+                context_str = ""
 
-            # 
-            print("\n" + "🚀"*15 + " DEBUG CONTEXT " + "🚀"*15)
-            print(context_str)
-            print("🚀"*37 + "\n")
+            try:
+                full_prompt = HR_RAG_PROMPT.format(
+                    history=history_str,
+                    context=context_str,
+                    question=question
+                )
+                logger.info(f"Prompt built ({len(full_prompt)} chars)")
+            except KeyError as e:
+                logger.error(f"Template variable missing: {e}", exc_info=True)
+                return {"answer": f"Prompt error: {e}", "sources": []}
+            except Exception as e:
+                logger.error(f"Prompt building failed: {e}", exc_info=True)
+                return self._no_result_response()
 
-            # ================================================================
-            # BƯỚC 4: PROMPTING - Đưa question + context vào prompt template
-            # ================================================================
-            logger.info(f"[4/6] PROMPTING: Building prompt...")
-            full_prompt = HR_RAG_PROMPT.format(
-                question=question,
-                context=context_str
-            )
-            logger.debug(f"   Prompt length: {len(full_prompt)} chars")
+            try:
+                llm_response = self.gemini_service.generate(prompt=full_prompt)
+                logger.info(f"LLM response generated ({len(llm_response)} chars)")
+            except Exception as e:
+                logger.error(f"LLM generation failed: {e}", exc_info=True)
+                return {"answer": f"LLM error: {str(e)}", "sources": []}
 
-            # ================================================================
-            # BƯỚC 5: GENERATE - Gọi Gemini LLM
-            # ================================================================
-            logger.info(f"[5/6] GENERATE: Calling Gemini LLM...")
-            llm_response = self.gemini_service.generate(prompt=full_prompt)
-            logger.info(f"✅ LLM response generated ({len(llm_response)} chars)")
-
-            # ================================================================
-            # BƯỚC 6: PARSE JSON - Parse response JSON từ LLM
-            # ================================================================
-            logger.info(f"[6/6] PARSE JSON: Parsing LLM response...")
-            parsed_response = self._parse_json_response(llm_response)
-            logger.info(f"✅ Response parsed successfully")
-
-            
-            logger.info(f"✅ Question answered successfully")
-            return parsed_response
+            try:
+                parsed_response = self._parse_json_response(llm_response)
+                logger.info("Response parsed successfully")
+                return parsed_response
+            except Exception as e:
+                logger.error(f"Response parsing failed: {e}", exc_info=True)
+                return {"answer": "Error processing response", "sources": []}
 
         except Exception as e:
-            logger.error(f"❌ Lỗi trong RAG pipeline: {e}", exc_info=True)
-            return {
-                "answer": f"Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi của bạn: {str(e)}",
-                "sources": []
-            }
+            logger.error(f"Pipeline error: {e}", exc_info=True)
+            return {"answer": f"Error: {str(e)}", "sources": []}
+
+    def _build_history_string(self, conversation_history: list[dict] = None) -> str:
+        """
+        Build formatted conversation history string from database messages.
+
+        Args:
+            conversation_history: List of previous messages [{"role": "user"|"assistant", "content": "..."}, ...]
+
+        Returns:
+            Formatted history string or empty string if no history
+        """
+        try:
+            if not conversation_history or len(conversation_history) == 0:
+                return ""
+
+            history_parts = []
+
+            for msg in conversation_history:
+                try:
+                    role = msg.get("role", "").lower().strip()
+                    content = msg.get("content", "")
+
+                    if role == "user":
+                        role_label = "**Nhân viên**"
+                    elif role == "assistant":
+                        role_label = "**HR Copilot**"
+                    else:
+                        role_label = f"**{role.upper()}**"
+
+                    formatted_msg = f"{role_label}: {content}"
+                    history_parts.append(formatted_msg)
+
+                except Exception as e:
+                    logger.warning(f"Error processing message: {e}")
+                    continue
+
+            if not history_parts:
+                return ""
+
+            history_str = "\n".join(history_parts)
+            logger.info(f"Formatted {len(history_parts)} history messages")
+
+            return history_str
+
+        except Exception as e:
+            logger.error(f"Error building history: {e}", exc_info=True)
+            return ""
+
 
     def _format_context(self, documents: list[dict]) -> str:
         """
-        Format danh sách documents thành chuỗi context rõ ràng.
+        Format documents into a readable context string with metadata.
 
         Args:
-            documents: list[dict] với keys: content, metadata, score
+            documents: List of documents with keys: content, metadata, score
 
         Returns:
-            str: Formatted context string với metadata
+            Formatted context string
         """
-        context_parts = []
+        try:
+            context_parts = []
 
-        for i, doc in enumerate(documents, 1):
-            content = doc.get("content", "")
-            metadata = doc.get("metadata", {})
-            score = doc.get("score", 0)
+            for i, doc in enumerate(documents, 1):
+                content = doc.get("content", "")
+                metadata = doc.get("metadata", {})
+                score = doc.get("score", 0)
 
-            # Trích xuất source info từ metadata
-            source = metadata.get("source", "Không rõ")
-            page = metadata.get("page", "?")
+                source = metadata.get("source", "Unknown")
+                page = metadata.get("page", "?")
 
-            # Format mỗi document
-            section = f"""[Tài liệu {i}]
-Nguồn: {source}
-Trang: {page}
-Độ liên quan: {score:.2%}
+                section = f"""[Document {i}]
+Source: {source}
+Page: {page}
+Relevance: {score:.2%}
 
 {content}
 
 ---"""
 
-            context_parts.append(section)
+                context_parts.append(section)
 
-        return "\n".join(context_parts)
+            return "\n".join(context_parts)
 
-    def _extract_sources(self, documents: list[dict]) -> list[dict]:
-        """
-        Trích xuất source information từ documents.
-
-        Args:
-            documents: list[dict] với metadata
-
-        Returns:
-            list[dict]: Danh sách sources với format: {"doc_name": "", "page": int, "article": ""}
-        """
-        sources = []
-
-        for doc in documents[:self.rerank_top_n]:
-            metadata = doc.get("metadata", {})
-            source_dict = {
-                "doc_name": metadata.get("source", "Không rõ").split("/")[-1],  # Lấy tên file
-                "page": metadata.get("page", 0),
-                "article": metadata.get("article", "Không rõ")
-            }
-            sources.append(source_dict)
-
-        return sources
+        except Exception as e:
+            logger.error(f"Context formatting error: {e}", exc_info=True)
+            return ""
 
     def _parse_json_response(self, response_text: str) -> dict:
         """
-        Parse JSON response từ LLM.
-        - Strip bỏ markdown code blocks nếu có
-        - Parse JSON safely
-        - Return default dict if error
+        Parse JSON response from LLM, removing markdown code blocks if present.
 
         Args:
-            response_text (str): Response text từ LLM
+            response_text: Response text from LLM
 
         Returns:
-            dict: {"answer": "", "sources": [...]}
+            Dictionary with "answer" and "sources" keys
         """
         try:
-            # Strip markdown code blocks (```json...```)
             cleaned = response_text.strip()
 
-            # Remove ```json at start
             if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]  # Remove "```json"
+                cleaned = cleaned[7:]
             elif cleaned.startswith("```"):
-                cleaned = cleaned[3:]  # Remove "```"
+                cleaned = cleaned[3:]
 
-            # Remove ``` at end
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
 
             cleaned = cleaned.strip()
 
-            # Parse JSON
             parsed = json.loads(cleaned)
 
-            # Validate structure
             if "answer" not in parsed:
                 parsed["answer"] = ""
             if "sources" not in parsed:
                 parsed["sources"] = []
 
-            logger.debug(f"✅ JSON parsed successfully")
+            logger.debug("JSON parsed successfully")
             return parsed
 
         except json.JSONDecodeError as e:
-            logger.error(f"❌ JSON decode error: {e}")
-            logger.debug(f"   Response text: {response_text[:200]}...")
-
-            return {
-                "answer": "Xin lỗi, có lỗi khi xử lý phản hồi từ hệ thống.",
-                "sources": []
-            }
+            logger.error(f"JSON decode error: {e}")
+            return {"answer": "Error processing response", "sources": []}
 
     def _no_result_response(self) -> dict:
         """
-        Trả về response mặc định khi không tìm thấy document.
-
-        Returns:
-            dict: {"answer": "...", "sources": []}
+        Return default response when no documents are found.
         """
         return {
             "answer": "Xin lỗi, tôi không tìm thấy thông tin này trong quy định hiện tại",
