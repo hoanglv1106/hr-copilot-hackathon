@@ -6,6 +6,7 @@ from app.core.prompt_templates import HR_RAG_PROMPT
 from app.integrations.rerank_client import CohereRerankService
 from app.integrations.qdrant_client import QdrantService
 from app.integrations.llm_client import GeminiService
+from app.repositories.cache_repo import CacheRepository
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class RAGService:
             self.qdrant_service = QdrantService()
             self.cohere_service = CohereRerankService()
             self.gemini_service = GeminiService(temperature=0.2)
+            self.cache_repo = CacheRepository()
 
             self.retrieve_top_k = 10
             self.rerank_top_n = 3
@@ -50,6 +52,12 @@ class RAGService:
             logger.info(f"Processing: {question[:60]}...")
 
             history_str = self._build_history_string(conversation_history)
+            
+            cache_key = self.cache_repo.generate_key(question, history_str)
+            cached_answer = self.cache_repo.get_cached_answer(cache_key)
+            if cached_answer:
+                logger.info(f"CACHE HIT: Returning cached answer immediately")
+                return cached_answer
 
             try:
                 retrieved_docs = self.qdrant_service.search(
@@ -123,6 +131,9 @@ class RAGService:
             try:
                 parsed_response = self._parse_json_response(llm_response)
                 logger.info("Response parsed successfully")
+                
+                self.cache_repo.set_cached_answer(cache_key, parsed_response)
+                
                 return parsed_response
             except Exception as e:
                 logger.error(f"Response parsing failed: {e}", exc_info=True)
