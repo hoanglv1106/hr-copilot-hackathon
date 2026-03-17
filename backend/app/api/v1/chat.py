@@ -21,7 +21,7 @@ rag_service = RAGService()
 @router.post("/", response_model=ChatResponse)
 async def post_chat(
     request: ChatRequest,
-    x_session_id: str = Header(..., description="Client UUID"),
+    x_session_id: str = Header(default="test-hackathon-user", description="Client UUID"),
     db: DBSession = Depends(get_db),
 ) -> ChatResponse:
     """
