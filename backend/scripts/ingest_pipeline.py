@@ -41,9 +41,7 @@ PDF_FOLDER = PROJECT_ROOT / "mock_data"
 
 def load_pdf_with_fallback(pdf_path: Path) -> list[Document]:
     """
-    Load PDF file with table optimization.
-    PRIMARY: pdfplumber (detect + extract tables to markdown)
-    FALLBACK: PyPDFLoader (simple text extraction)
+    Load PDF file with table optimization (ĐÃ FIX LỖI RÁC VÀ NHÂN ĐÔI DATA)
     """
     documents = []
     
@@ -53,15 +51,26 @@ def load_pdf_with_fallback(pdf_path: Path) -> list[Document]:
         with pdfplumber.open(str(pdf_path)) as pdf:
             for page_idx, page in enumerate(pdf.pages):
                 page_num = page_idx + 1
-                text_content = page.extract_text()
-                tables = page.extract_tables()
                 content_parts = []
+                
+                # 1. Tìm bảng trên trang
+                tables = page.find_tables()
+                
+                # 2. Lấy chữ NGOẠI TRỪ chữ trong bảng
+                text_content = ""
+                if tables:
+                    non_table_page = page.filter(lambda obj: not any(t.bbox[0] <= obj["x0"] <= t.bbox[2] and t.bbox[1] <= obj["top"] <= t.bbox[3] for t in tables))
+                    text_content = non_table_page.extract_text()
+                else:
+                    text_content = page.extract_text()
                 
                 if text_content and text_content.strip():
                     content_parts.append(text_content)
                 
-                if tables:
-                    for table_idx, table in enumerate(tables):
+                # 3. Lấy dữ liệu bảng convert sang Markdown
+                extracted_tables = page.extract_tables()
+                if extracted_tables:
+                    for table_idx, table in enumerate(extracted_tables):
                         try:
                             markdown_table = _table_to_markdown(table)
                             if markdown_table:
@@ -93,7 +102,7 @@ def load_pdf_with_fallback(pdf_path: Path) -> list[Document]:
         logger.warning(f"pdfplumber failed: {e}, falling back to PyPDFLoader...")
         documents = []
     
-    
+    # ... (Giữ nguyên phần try catch PyPDFLoader ở dưới của ông) ...
     try:
         logger.info(f"Falling back to PyPDFLoader for basic text extraction...")
         loader = PyPDFLoader(str(pdf_path))
@@ -129,7 +138,8 @@ def load_pdf_with_fallback(pdf_path: Path) -> list[Document]:
 
 def _table_to_markdown(table: list[list]) -> str:
     """
-    Convert table list to markdown format."""
+    Convert table list to markdown format (ĐÃ FIX LỖI \n LÀM VỠ BẢNG)
+    """
     if not table or len(table) == 0:
         return ""
     
@@ -137,7 +147,8 @@ def _table_to_markdown(table: list[list]) -> str:
         lines = []
         
         for row_idx, row in enumerate(table):
-            cells = [str(cell).strip() if cell else "" for cell in row]
+            # Xóa \n và \r để giữ cấu trúc bảng
+            cells = [str(cell).replace('\n', ' ').replace('\r', '').strip() if cell else "" for cell in row]
             markdown_row = "| " + " | ".join(cells) + " |"
             lines.append(markdown_row)
             
