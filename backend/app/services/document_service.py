@@ -3,6 +3,7 @@ import logging
 import os
 import tempfile
 import time
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -49,7 +50,12 @@ class DocumentService:
 
     def _load_pdf_with_fallback(self, pdf_path: Path) -> list[Document]:
         """
-        Load PDF file with table optimization.
+        Load PDF file with optimized table extraction (no text duplication).
+        
+        OPTIMIZATION: Extract table bounding boxes FIRST, then filter out text within
+        those regions before calling extract_text(). This prevents LLM from reading
+        duplicated/garbled table content.
+        
         PRIMARY: pdfplumber (detect + extract tables to markdown)
         FALLBACK: PyPDFLoader (simple text extraction)
 
@@ -67,13 +73,41 @@ class DocumentService:
             with pdfplumber.open(str(pdf_path)) as pdf:
                 for page_idx, page in enumerate(pdf.pages):
                     page_num = page_idx + 1
-                    text_content = page.extract_text()
-                    tables = page.extract_tables()
                     content_parts = []
 
+                    #  FIX #2: Extract tables FIRST to get their bounding boxes
+                    tables = page.extract_tables()
+                    table_bboxes = []
+                    
+                    if tables:
+                        logger.info(f"Page {page_num}: Found {len(tables)} tables")
+                        # Get bounding boxes of all detected tables
+                        for table in page.find_tables():
+                            table_bboxes.append(table.bbox)
+                    
+                    #  FIX #2: Filter out text objects within table bounding boxes
+                    # This ensures extract_text() only gets regular text, not table content
+                    if table_bboxes:
+                        # Create filter to exclude text within table regions
+                        filtered_page = page
+                        for bbox in table_bboxes:
+                            # pdfplumber's filter excludes objects OUTSIDE the given bbox
+                            # We need to manually remove objects INSIDE bbox ranges
+                            filtered_page = filtered_page.filter(
+                                lambda obj: not (
+                                    bbox[0] <= obj.get("x0", 0) < bbox[2] and
+                                    bbox[1] <= obj.get("top", 0) < bbox[3]
+                                )
+                            )
+                        text_content = filtered_page.extract_text()
+                    else:
+                        # No tables detected, extract all text normally
+                        text_content = page.extract_text()
+                    
                     if text_content and text_content.strip():
                         content_parts.append(text_content)
 
+                    # ✅ Now add tables if they exist
                     if tables:
                         for table_idx, table in enumerate(tables):
                             try:
@@ -143,7 +177,11 @@ class DocumentService:
 
     def _table_to_markdown(self, table: list[list]) -> str:
         """
-        Convert table list to markdown format.
+        Convert table list to markdown format with newline handling.
+        
+         FIX #1: Replace all newlines (\n, \r) with spaces in cell content
+        to prevent markdown table structure from breaking. Each markdown row
+        must be on a single line.
 
         Args:
             table: List of lists representing table rows
@@ -158,7 +196,18 @@ class DocumentService:
             lines = []
 
             for row_idx, row in enumerate(table):
-                cells = [str(cell).strip() if cell else "" for cell in row]
+                # ✅ FIX #1: Clean cell content - remove newlines and strip whitespace
+                cells = []
+                for cell in row:
+                    cell_str = str(cell) if cell else ""
+                    # Replace all newlines and carriage returns with spaces
+                    cell_str = re.sub(r'[\n\r]+', ' ', cell_str)
+                    # Strip leading/trailing whitespace
+                    cell_str = cell_str.strip()
+                    # Remove extra internal spaces (multiple spaces → single space)
+                    cell_str = re.sub(r'\s+', ' ', cell_str)
+                    cells.append(cell_str)
+                
                 markdown_row = "| " + " | ".join(cells) + " |"
                 lines.append(markdown_row)
 
@@ -166,7 +215,9 @@ class DocumentService:
                     separator = "| " + " | ".join(["---"] * len(row)) + " |"
                     lines.append(separator)
 
-            return "\n".join(lines)
+            result = "\n".join(lines)
+            logger.debug(f"Converted table to markdown: {len(result)} characters")
+            return result
 
         except Exception as e:
             logger.warning(f"Error converting table to markdown: {e}")
@@ -260,6 +311,97 @@ class DocumentService:
             logger.warning(f"No old versions to delete or error: {e}")
             return False
 
+    def _chunk_and_embed(self, documents: list[Document], file_hash: str, qdrant_client: QdrantClient) -> bool:
+        """
+         FIX #3: Shared logic for chunking and embedding documents.
+        
+        Extracted common code from both process_and_embed_document and
+        process_and_embed_document_from_db to follow DRY principle.
+        
+        Pipeline:
+        1. Split documents into chunks using MarkdownTextSplitter
+        2. Add file_hash to chunk metadata
+        3. Initialize embeddings
+        4. Batch push chunks to Qdrant (optimize vector store initialization)
+
+        Args:
+            documents: List of Document objects to chunk and embed
+            file_hash: SHA256 hash to add to metadata
+            qdrant_client: Qdrant client instance for embedding
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info("Chunking documents with MarkdownTextSplitter...")
+            text_splitter = MarkdownTextSplitter(
+                chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
+            )
+            raw_chunks = text_splitter.split_documents(documents)
+
+            chunks = [c for c in raw_chunks if c.page_content.strip()]
+
+            if not chunks:
+                logger.error("No chunks created after splitting")
+                return False
+
+            logger.info(f"Created {len(chunks)} chunks (markdown content preserved)")
+
+            # Add file_hash to all chunks
+            try:
+                for chunk in chunks:
+                    chunk.metadata["file_hash"] = file_hash
+                logger.info("Updated chunk metadata with file_hash")
+            except Exception as e:
+                logger.warning(f"Error updating chunk metadata: {e}")
+
+            # ✅ FIX #3: Initialize embeddings once, then do batched upserts
+            logger.info("Embedding documents with GoogleGenerativeAI...")
+            embeddings = GoogleGenerativeAIEmbeddings(
+                model="gemini-embedding-001",
+                google_api_key=self.gemini_api_key,
+            )
+
+            total_chunks = len(chunks)
+            vector_store = None
+
+            for i in range(0, total_chunks, self.batch_size):
+                batch = chunks[i : i + self.batch_size]
+                batch_num = i // self.batch_size + 1
+                logger.info(
+                    f"Pushing batch {batch_num} (chunks {i} to {min(i + self.batch_size, total_chunks)})..."
+                )
+
+                try:
+                    if i == 0:
+                        # First batch: initialize vector store
+                        vector_store = QdrantVectorStore.from_documents(
+                            documents=batch,
+                            embedding=embeddings,
+                            url=self.qdrant_url,
+                            collection_name=self.collection_name,
+                        )
+                        logger.info(f"Batch 1 (initialize) pushed successfully")
+                    else:
+                        # Subsequent batches: append to existing vector store
+                        if vector_store:
+                            vector_store.add_documents(batch)
+                            logger.info(f"Batch {batch_num} (append) pushed successfully")
+
+                    # Rate limiting: add delay between batches
+                    if i + self.batch_size < total_chunks:
+                        time.sleep(2)
+                except Exception as e:
+                    logger.error(f"Error pushing batch {batch_num}: {e}", exc_info=True)
+                    raise
+
+            logger.info(f"All {total_chunks} chunks embedded and pushed to Qdrant successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error during chunking/embedding: {e}", exc_info=True)
+            return False
+
     def process_and_embed_document(self, file_path: Path, filename: str) -> bool:
         """
         Process single PDF file and embed into Qdrant vector store.
@@ -269,7 +411,7 @@ class DocumentService:
         1. Calculate file hash for deduplication
         2. Check if same content already exists (skip if duplicate)
         3. Delete old versions with same filename
-        4. Extract, chunk, and embed PDF
+        4. Extract, chunk, and embed PDF (using _chunk_and_embed)
         5. Append to Qdrant collection
 
         Args:
@@ -328,74 +470,17 @@ class DocumentService:
                 logger.error(f"Error loading PDF: {e}", exc_info=True)
                 return False
 
+            # ✅ FIX #3: Use shared _chunk_and_embed method
             try:
-                logger.info("Chunking documents with MarkdownTextSplitter...")
-                text_splitter = MarkdownTextSplitter(
-                    chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
-                )
-                raw_chunks = text_splitter.split_documents(documents)
-
-                chunks = [c for c in raw_chunks if c.page_content.strip()]
-
-                if not chunks:
-                    logger.error("No chunks created after splitting")
+                success = self._chunk_and_embed(documents, file_hash, qdrant_client)
+                if success:
+                    logger.info(f"Document {filename} processed and embedded successfully")
+                    return True
+                else:
+                    logger.error(f"Failed to chunk and embed document {filename}")
                     return False
-
-                logger.info(f"Created {len(chunks)} chunks (table content preserved)")
             except Exception as e:
-                logger.error(f"Error chunking documents: {e}", exc_info=True)
-                return False
-
-            try:
-                for chunk in chunks:
-                    chunk.metadata["file_hash"] = file_hash
-
-                logger.info("Updated chunk metadata with file_hash")
-            except Exception as e:
-                logger.warning(f"Error updating chunk metadata: {e}")
-
-            try:
-                logger.info("Embedding and appending to Qdrant...")
-                embeddings = GoogleGenerativeAIEmbeddings(
-                    model="gemini-embedding-001",
-                    google_api_key=self.gemini_api_key,
-                )
-
-                total_chunks = len(chunks)
-                vector_store = None
-
-                for i in range(0, total_chunks, self.batch_size):
-                    batch = chunks[i : i + self.batch_size]
-                    batch_num = i // self.batch_size + 1
-                    logger.info(
-                        f"Pushing batch {batch_num} (chunks {i} to {min(i + self.batch_size, total_chunks)})..."
-                    )
-
-                    try:
-                        if i == 0:
-                            vector_store = QdrantVectorStore.from_documents(
-                                documents=batch,
-                                embedding=embeddings,
-                                url=self.qdrant_url,
-                                collection_name=self.collection_name,
-                            )
-                            logger.info(f"Batch 1 (initialize/append) pushed successfully")
-                        else:
-                            if vector_store:
-                                vector_store.add_documents(batch)
-                                logger.info(f"Batch {batch_num} (append) pushed successfully")
-
-                        if i + self.batch_size < total_chunks:
-                            time.sleep(2)
-                    except Exception as e:
-                        logger.error(f"Error pushing batch {batch_num}: {e}", exc_info=True)
-                        raise
-
-                logger.info(f"Document {filename} processed and embedded successfully")
-                return True
-
-            except Exception as e:
-                logger.error(f"Error embedding document: {e}", exc_info=True)
+                logger.error(f"Error in chunk_and_embed: {e}", exc_info=True)
                 return False
 
         except Exception as e:
@@ -413,9 +498,9 @@ class DocumentService:
         Pipeline:
         1. Query DocumentRecord from database
         2. Write file_bytes to temporary file
-        3. Delete old versions with same filename
-        4. Extract, chunk, and embed PDF
-        5. Append to Qdrant collection
+        3. Calculate file hash
+        4. Delete old versions with same filename
+        5. Extract, chunk, and embed PDF (using _chunk_and_embed)
         6. Delete temporary file
 
         Args:
@@ -493,74 +578,17 @@ class DocumentService:
                 logger.error(f"Error loading PDF: {e}", exc_info=True)
                 return False
 
+            # ✅ FIX #3: Use shared _chunk_and_embed method
             try:
-                logger.info("Chunking documents with MarkdownTextSplitter...")
-                text_splitter = MarkdownTextSplitter(
-                    chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
-                )
-                raw_chunks = text_splitter.split_documents(documents)
-
-                chunks = [c for c in raw_chunks if c.page_content.strip()]
-
-                if not chunks:
-                    logger.error("No chunks created after splitting")
+                success = self._chunk_and_embed(documents, file_hash, qdrant_client)
+                if success:
+                    logger.info(f"Document {doc_record.filename} processed and embedded successfully")
+                    return True
+                else:
+                    logger.error(f"Failed to chunk and embed document {doc_record.filename}")
                     return False
-
-                logger.info(f"Created {len(chunks)} chunks (table content preserved)")
             except Exception as e:
-                logger.error(f"Error chunking documents: {e}", exc_info=True)
-                return False
-
-            try:
-                for chunk in chunks:
-                    chunk.metadata["file_hash"] = file_hash
-
-                logger.info("Updated chunk metadata with file_hash")
-            except Exception as e:
-                logger.warning(f"Error updating chunk metadata: {e}")
-
-            try:
-                logger.info("Embedding and appending to Qdrant...")
-                embeddings = GoogleGenerativeAIEmbeddings(
-                    model="gemini-embedding-001",
-                    google_api_key=self.gemini_api_key,
-                )
-
-                total_chunks = len(chunks)
-                vector_store = None
-
-                for i in range(0, total_chunks, self.batch_size):
-                    batch = chunks[i : i + self.batch_size]
-                    batch_num = i // self.batch_size + 1
-                    logger.info(
-                        f"Pushing batch {batch_num} (chunks {i} to {min(i + self.batch_size, total_chunks)})..."
-                    )
-
-                    try:
-                        if i == 0:
-                            vector_store = QdrantVectorStore.from_documents(
-                                documents=batch,
-                                embedding=embeddings,
-                                url=self.qdrant_url,
-                                collection_name=self.collection_name,
-                            )
-                            logger.info(f"Batch 1 (initialize/append) pushed successfully")
-                        else:
-                            if vector_store:
-                                vector_store.add_documents(batch)
-                                logger.info(f"Batch {batch_num} (append) pushed successfully")
-
-                        if i + self.batch_size < total_chunks:
-                            time.sleep(2)
-                    except Exception as e:
-                        logger.error(f"Error pushing batch {batch_num}: {e}", exc_info=True)
-                        raise
-
-                logger.info(f"Document {doc_record.filename} processed and embedded successfully")
-                return True
-
-            except Exception as e:
-                logger.error(f"Error embedding document: {e}", exc_info=True)
+                logger.error(f"Error in chunk_and_embed: {e}", exc_info=True)
                 return False
 
         except Exception as e:
