@@ -48,7 +48,7 @@ class DocumentService:
             logger.error(f"Failed to initialize DocumentService: {e}", exc_info=True)
             raise
 
-    def _load_pdf_with_fallback(self, pdf_path: Path) -> list[Document]:
+    def _load_pdf_with_fallback(self, pdf_path: Path ,original_filename: str = None ) -> list[Document]:
         """
         Load PDF file with optimized table extraction (no text duplication).
         
@@ -129,7 +129,7 @@ class DocumentService:
                     doc = Document(
                         page_content=full_content,
                         metadata={
-                            "source": pdf_path.name,
+                            "source": original_filename if original_filename else pdf_path.name,
                             "page": page_num,
                             "has_tables": bool(tables),
                         },
@@ -161,7 +161,7 @@ class DocumentService:
                 new_doc = Document(
                     page_content=cleaned_content,
                     metadata={
-                        "source": pdf_path.name,
+                        "source": original_filename if original_filename else pdf_path.name,
                         "page": page_num,
                         "has_tables": False,
                     },
@@ -460,7 +460,7 @@ class DocumentService:
                 logger.warning(f"Error deleting old versions: {e}")
 
             try:
-                documents = self._load_pdf_with_fallback(file_path)
+                documents = self._load_pdf_with_fallback(file_path, original_filename=filename)
                 if not documents:
                     logger.error("No documents loaded from PDF")
                     return False
@@ -568,7 +568,7 @@ class DocumentService:
                 logger.warning(f"Error deleting old versions: {e}")
 
             try:
-                documents = self._load_pdf_with_fallback(file_path)
+                documents = self._load_pdf_with_fallback(file_path, original_filename=doc_record.filename)
                 if not documents:
                     logger.error("No documents loaded from PDF")
                     return False
