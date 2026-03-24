@@ -1,12 +1,20 @@
-/*
- * File: api.js
- * Công dụng: Cấu hình Axios instance để gọi API backend
- * - Base URL: lấy từ env var VITE_API_URL
- * - Headers: Content-Type: application/json
- * - Interceptors:
- *   - Request interceptor: thêm auth token (nếu cần)
- *   - Response interceptor: handle error responses
- * 
- * Export: apiClient instance
- * Usage: apiClient.get('/api/v1/chat'), apiClient.post('/api/v1/chat')
- */
+import axiosClient from '../api/axiosClient';
+
+export const getChatHistory = async () => {
+    const response = await axiosClient.get('/chat/history');
+    return response.data.messages || [];
+};
+
+export const sendChatMessage = async (message) => {
+    const response = await axiosClient.post('/chat/', { message });
+    return response.data.data.answer;
+};
+
+export const uploadDocument = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await axiosClient.post('/documents/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+};
