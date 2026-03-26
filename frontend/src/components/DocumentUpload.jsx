@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText } from 'lucide-react';
+import { Upload } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { uploadDocument } from '../services/api';
 
@@ -80,11 +80,12 @@ export default function DocumentUpload() {
   return (
     <div
       className={`
-        w-full p-6 mb-6 border-2 border-dashed rounded-lg
-        transition-all duration-200 cursor-pointer
+        w-full px-3 py-2.5 rounded-xl cursor-pointer
+        border transition-all duration-300 ease-out
+        flex items-center gap-3 shadow-[0_1px_2px_rgba(0,0,0,0.02)]
         ${isDragging
-          ? 'border-blue-500 bg-blue-50'
-          : 'border-gray-300 bg-gray-50 hover:border-blue-400'
+          ? 'border-peach bg-[#FDFBF7] dark:bg-[#2A2421]'
+          : 'border-[#EBE5D9] dark:border-[#3E352F] bg-white dark:bg-[#1E1A18] hover:border-peach/40 hover:shadow-sm'
         }
         ${isUploading ? 'opacity-60 pointer-events-none' : ''}
       `}
@@ -101,28 +102,28 @@ export default function DocumentUpload() {
         className="hidden"
       />
 
-      <div className="flex flex-col items-center justify-center gap-3">
-        {isUploading ? (
-          <>
-            <div className="animate-spin">
-              <Upload className="w-8 h-8 text-blue-500" />
-            </div>
-            <p className="text-sm font-medium text-gray-700">Đang upload...</p>
-          </>
-        ) : (
-          <>
-            <FileText className="w-8 h-8 text-gray-400" />
-            <div className="text-center">
-              <p className="text-sm font-medium text-gray-900">
-                Kéo & thả PDF vào đây hoặc bấm để chọn
-              </p>
-              <p className="text-xs text-gray-500 mt-1">
-                Tối đa 50MB, format PDF
-              </p>
-            </div>
-          </>
-        )}
-      </div>
+      {isUploading ? (
+        <>
+          <div className="w-7 h-7 rounded-lg bg-peach/10 flex items-center justify-center flex-shrink-0">
+            <div className="w-3.5 h-3.5 border-2 border-peach border-t-transparent rounded-full animate-spin" />
+          </div>
+          <span className="text-[12px] font-medium text-text-secondary dark:text-dark-text-secondary">Đang tải lên...</span>
+        </>
+      ) : (
+        <>
+          <div className="w-8 h-8 rounded-xl bg-peach/10 dark:bg-peach/10 border border-peach/20 dark:border-peach/20 flex items-center justify-center flex-shrink-0 text-peach">
+            <Upload className="w-4 h-4" strokeWidth={2.5} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-bold tracking-tight text-[#E87E60] dark:text-[#F39A80] truncate">
+              Tải tài liệu PDF
+            </p>
+            <p className="text-[11px] text-[#A6998A] dark:text-[#9A8D7E] mt-[2px] font-medium truncate">
+              Kéo thả hoặc nhấn để chọn
+            </p>
+          </div>
+        </>
+      )}
     </div>
   );
 }

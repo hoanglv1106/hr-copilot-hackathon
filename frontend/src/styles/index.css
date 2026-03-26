@@ -10,11 +10,14 @@ html,
 body {
   margin: 0;
   padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: #FCF7F2;
+}
+
+html.dark body {
+  background-color: #1A1412;
 }
 
 #root {
@@ -22,30 +25,47 @@ body {
   height: 100vh;
 }
 
-/* Scrollbar styling */
+/* Smooth transitions */
+*,
+*::before,
+*::after {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease;
+}
+
+/* ─── Scrollbar: Light ─── */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 4px;
+  background: #DDD0C4;
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #999;
+  background: #C4B5A6;
 }
 
-/* Toast styling overrides */
+/* ─── Scrollbar: Dark ─── */
+.dark ::-webkit-scrollbar-thumb {
+  background: #3D3430;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #5A4E48;
+}
+
+/* ─── Toast ─── */
 .Toastify__toast {
-  font-size: 14px;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
 }
 
 .Toastify__toast--success {
@@ -53,7 +73,7 @@ body {
 }
 
 .Toastify__toast--warning {
-  background-color: #f59e0b;
+  background-color: #E8976E;
 }
 
 .Toastify__toast--error {
@@ -61,5 +81,18 @@ body {
 }
 
 .Toastify__toast--info {
-  background-color: #3b82f6;
+  background-color: #E8976E;
+}
+
+/* ─── Prose dark ─── */
+.dark .prose {
+  color: #E8DDD6;
+}
+
+.dark .prose strong {
+  color: #F0E6DE;
+}
+
+.dark .prose code {
+  color: #F6C7B8;
 }

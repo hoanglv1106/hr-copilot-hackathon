@@ -1,22 +1,14 @@
 import React from 'react';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import { Brain } from 'lucide-react';
 import ChatWindow from './components/ChatWindow';
 import DocumentUpload from './components/DocumentUpload';
-
-/**
- * App Component - Root component của ứng dụng
- * 
- * Layout: Sidebar (25%) + MainContent (75%)
- * - Sidebar: Logo, tiêu đề, DocumentUpload component
- * - MainContent: ChatWindow component
- * - ToastContainer: Hiển thị toast notifications
- */
+import ThemeToggle from './components/ThemeToggle';
 
 export default function App() {
   return (
-    <div className="h-screen flex bg-gray-100">
-      {/* ToastContainer cho react-toastify */}
+    <div className="h-screen flex bg-surface dark:bg-dark-bg transition-colors duration-300">
       <ToastContainer
         position="top-right"
         autoClose={3000}
@@ -29,63 +21,54 @@ export default function App() {
         pauseOnHover
       />
 
-      {/* Sidebar - 25% width */}
-      <div className="w-1/4 bg-white border-r border-gray-300 flex flex-col">
-        {/* Header */}
-        <div className="p-6 border-b border-gray-300">
-          {/* Logo and Title */}
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-lg">HR</span>
+      {/* Sidebar — compact & modern */}
+      <div className="w-[260px] min-w-[260px] bg-sidebar dark:bg-dark-surface border-r border-[#EBE5D9] dark:border-[#3E352F] flex flex-col">
+        {/* Header - Logo updated to minimalistic SaaS style */}
+        <div className="px-4 py-4 flex items-center justify-between border-b border-[#EBE5D9]/50 dark:border-[#3E352F]/50">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-[#FDFBF7] dark:bg-[#2A2421] border border-[#EBE5D9] dark:border-[#3E352F] shadow-sm flex items-center justify-center p-1 text-peach">
+              {/* Brain Logo */}
+              <Brain strokeWidth={2.5} className="w-full h-full" />
             </div>
-            <h1 className="text-xl font-bold text-gray-900">HR Copilot</h1>
+            <span className="text-[15px] font-medium tracking-tight text-text-primary dark:text-dark-text">HR Copilot</span>
           </div>
-          <p className="text-xs text-gray-500">Admin Assistant</p>
+          <ThemeToggle />
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="space-y-4">
-            {/* Upload Document Section */}
-            <div>
-              <h2 className="text-sm font-semibold text-gray-900 mb-3">
-                📚 Tải tài liệu
-              </h2>
-              <DocumentUpload />
-            </div>
-
-            {/* Info Section */}
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mt-6">
-              <h3 className="text-sm font-semibold text-blue-900 mb-2">
-                💡 Mẹo sử dụng
-              </h3>
-              <ul className="text-xs text-blue-800 space-y-2">
-                <li>✓ Tải PDF chính sách nhân sự</li>
-                <li>✓ AI sẽ học hỏi từ tài liệu</li>
-                <li>✓ Đặt câu hỏi qua chat</li>
-                <li>✓ Phản hồi nhanh & chính xác</li>
-              </ul>
-            </div>
-          </div>
+        {/* New Chat Button */}
+        <div className="px-3 pt-4 pb-1">
+          <button 
+            className="w-full flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-[#2A2421] hover:bg-[#FDFBF7] dark:hover:bg-[#3E352F] border border-[#EBE5D9] dark:border-[#3E352F] rounded-xl text-[13px] font-medium text-text-primary dark:text-dark-text transition-all shadow-sm"
+            onClick={() => {
+              localStorage.removeItem('hr_session_id');
+              window.location.reload();
+            }}
+          >
+            <span className="text-lg font-light leading-none mb-0.5 ml-1">+</span>
+            <span>Cuộc trò chuyện mới</span>
+          </button>
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-gray-300 bg-gray-50">
-          <p className="text-xs text-gray-500 text-center">
-            v1.0.0
+        {/* Chat History area */}
+        <div className="flex-1 overflow-y-auto px-3 py-2">
+          <p className="text-[10px] font-medium text-text-muted/80 dark:text-dark-text-muted/80 uppercase tracking-widest mb-2.5 px-2 mt-2">
+            Lịch sử
           </p>
+          <div className="space-y-0.5">
+            <div className="px-3 py-2.5 rounded-xl text-[13px] font-medium text-text-primary dark:text-dark-text truncate cursor-pointer bg-[#FDFBF7] dark:bg-[#2A2421] border border-[#EBE5D9] dark:border-[#3E352F] shadow-sm transition-colors">
+              Cuộc trò chuyện hiện tại
+            </div>
+          </div>
+        </div>
+
+        {/* Upload section */}
+        <div className="px-3 pb-5">
+          <DocumentUpload />
         </div>
       </div>
 
-      {/* Main Content - 75% width */}
-      <div className="flex-1 flex flex-col bg-white">
-        {/* Top Bar */}
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 shadow-md">
-          <h2 className="text-lg font-semibold">Hỏi đáp chính sách nhân sự</h2>
-          <p className="text-sm text-blue-100 mt-1">Sử dụng AI để giải đáp nhanh chóng</p>
-        </div>
-
-        {/* Chat Window */}
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col bg-surface dark:bg-dark-bg min-w-0">
         <ChatWindow />
       </div>
     </div>
